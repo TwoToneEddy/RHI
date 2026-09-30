@@ -31,25 +31,30 @@ internal static class CommandLine
         if (args[0] == "--smoke-test") return await SmokeTest(http, catalog);
         if (args[0] == "--nr-smoke-test") return await NeuralRenderingSmokeTest(http, catalog);
         if (args[0] == "--os-smoke-test") return await OptiScalerSmokeTest(http);
+        if (args[0] == "--native-reshade-smoke-test") return await NativeReShadeSmokeTest(http);
         if (args[0] == "--prepare" && args.Length >= 2) return await Prepare(args[1], args.Contains("--ue-hdr"), args.Contains("--nightly"), http, catalog);
         if (args[0] == "--save-launch-options" && args.Length == 2)
         {
             var game = FindGame(args[1], catalog);
+            NativeReShade.RequireWindowsBackend(Settings.Load().For(game));
             var proxy = new Installation(game.InstallDirectory).ReadState().Proxy ?? throw new IOException("Install ReShade first.");
             var configs = Proton.LocalConfigs(game).ToList();
             if (configs.Count != 1) throw new IOException("Select the Steam user account in the desktop app to save launch options.");
-            var options = Proton.LaunchOptions(Proton.ReadOptions(configs[0], args[1]) ?? "%command%", proxy, GameLaunch.Extras(game, Settings.Load().For(game)));
+            var existing = Proton.ReadOptions(configs[0], args[1]) ?? "%command%";
+            NativeReShade.RequireNotActivated(existing);
+            var options = Proton.LaunchOptions(existing, proxy, GameLaunch.Extras(game, Settings.Load().For(game)));
             Console.WriteLine("Saved. Backup: " + Proton.SaveOptions(configs[0], args[1], options));
             Console.WriteLine(options); return 0;
         }
         if (args[0] == "--restore-hdr" && args.Length == 2)
         {
             var game = FindGame(args[1], catalog);
+            NativeReShade.RequireWindowsBackend(Settings.Load().For(game));
             foreach (var ini in IniSettings.FindEngineInis(game)) IniSettings.Restore(ini);
             IniSettings.Restore(LinuxPaths.ResolveCase(game.InstallDirectory, "ReShade.ini"));
             Console.WriteLine("Previous HDR settings and file permissions restored."); return 0;
         }
-        Console.WriteLine("RHI Linux\n  (no arguments)    Open the desktop app\n  --scan            Print detected games, executable paths and Proton prefixes as JSON\n  --catalog-check   Fetch and validate the live RenoDX catalogue\n  --smoke-test      Test real ReShade, RenoDX, shader and RE Framework downloads, install/update/remove in an isolated temporary directory\n  --nr-smoke-test   Install, swap and remove every Neural Rendering (DLSS 5) method in a temporary game\n  --os-smoke-test   Install, update and remove every OptiScaler version beside ReShade in a temporary game\n  --prepare APPID [--ue-hdr] [--nightly]  Install ReShade using the saved channel, matched RenoDX and shaders\n  --save-launch-options APPID  Save its DLL override with Steam fully closed\n  --restore-hdr APPID  Restore previous HDR settings and Engine.ini permissions\n");
+        Console.WriteLine("RHI Linux\n  (no arguments)    Open the desktop app\n  --scan            Print detected games, executable paths and Proton prefixes as JSON\n  --catalog-check   Fetch and validate the live RenoDX catalogue\n  --smoke-test      Test real ReShade, RenoDX, shader and RE Framework downloads, install/update/remove in an isolated temporary directory\n  --nr-smoke-test   Install, swap and remove every Neural Rendering (DLSS 5) method in a temporary game\n  --os-smoke-test   Install, update and remove every OptiScaler version beside ReShade in a temporary game\n  --native-reshade-smoke-test  Download the pinned experimental Native Vulkan ReShade release and install/remove it in a temporary prefix\n  --prepare APPID [--ue-hdr] [--nightly]  Install ReShade using the saved channel, matched RenoDX and shaders\n  --save-launch-options APPID  Save its DLL override with Steam fully closed\n  --restore-hdr APPID  Restore previous HDR settings and Engine.ini permissions\n");
         return args[0] is "--help" or "-h" ? 0 : 2;
     }
 
@@ -68,6 +73,9 @@ internal static class CommandLine
         await catalog.Refresh(progress);
         var game = FindGame(appId, catalog);
         var settings = Settings.Load(); var prefs = settings.For(game);
+        NativeReShade.RequireWindowsBackend(prefs);
+        foreach (var config in Proton.LocalConfigs(game))
+            NativeReShade.RequireNotActivated(Proton.ReadOptions(config, game.AppId!) ?? "");
         var channel = nightly ? "Nightly" : prefs.Channel;
         var mod = catalog.Match(game) ?? throw new IOException("No exact RenoDX catalogue match. Select a mod in the desktop app.");
         var url = catalog.AddonUrl(game, mod) ?? throw new IOException("No direct addon download for this game and architecture.");
@@ -253,6 +261,37 @@ internal static class CommandLine
             return 0;
         }
         finally { Directory.Delete(temp, true); }
+    }
+
+    // Never touches the user's ~/.local: the prefix, metadata and layer search path are temporary.
+    private static async Task<int> NativeReShadeSmokeTest(HttpClient http)
+    {
+        var temp = Path.Combine(Path.GetTempPath(), "rhi-native-smoke-" + Guid.NewGuid().ToString("N"));
+        var data = Path.Combine(temp, "share");
+        var native = new NativeReShade(data, Path.Combine(temp, "rhi"), [Path.Combine(data, "vulkan/implicit_layer.d")]);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(native.ShaderRoot, "Shaders"));
+            var userShader = Path.Combine(native.ShaderRoot, "Shaders/Deband.fx");
+            File.WriteAllText(userShader, "user copy");
+            await native.Install(new Downloads(http), new Progress<string>(Console.WriteLine));
+            var status = native.Status();
+            if (status.State != NativeRuntimeState.Installed || status.Version != NativeReShade.Version) throw new Exception("Runtime status: " + status.Label);
+            if (NativeBinary.Inspect(native.LibraryPath) != NativeBinaryKind.ElfX64) throw new Exception("Host library is not x86-64 ELF.");
+            NativeReShade.ValidateManifest(File.ReadAllBytes(native.ManifestPath));
+            if (File.ReadAllText(userShader) != "user copy") throw new Exception("An existing shader was replaced.");
+            if (!File.Exists(Path.Combine(native.ShaderRoot, "Shaders/ReShade.fxh"))) throw new Exception("Standard shaders were not installed.");
+            if (Directory.Exists(Path.Combine(data, "reshade")) && Directory.EnumerateFiles(Path.Combine(data, "reshade"), "*.addon*", SearchOption.AllDirectories).Any())
+                throw new Exception("Optional add-ons must not be installed.");
+            await native.Install(new Downloads(http));
+            native.Remove(new Settings());
+            if (File.Exists(native.LibraryPath) || File.Exists(native.ManifestPath) || File.Exists(Path.Combine(native.ShaderRoot, "Shaders/ReShade.fxh")))
+                throw new Exception("Removal left RHI-owned runtime files.");
+            if (File.ReadAllText(userShader) != "user copy") throw new Exception("Removal changed a user shader.");
+            Console.WriteLine("Native Vulkan ReShade " + NativeReShade.Version + ": checksum, layout, opt-in manifest, reinstall and removal verified.");
+            return 0;
+        }
+        finally { if (Directory.Exists(temp)) Directory.Delete(temp, true); }
     }
 
     private static async Task<int> OptiScalerSmokeTest(HttpClient http)

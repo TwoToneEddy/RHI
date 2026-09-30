@@ -129,7 +129,7 @@ public sealed partial class MainWindow
         if (_settings.DlssDefaults.IsEmpty) { await Message("DLSS defaults", "Choose at least one default version, preset or render scale first."); return; }
         var candidates = new List<(Game Game, DlssDetection Detection)>();
         _status.Text = "Finding games with DLSS…";
-        foreach (var game in _games.Where(g => g.Executable != null))
+        foreach (var game in _games.Where(g => g.Executable != null && !NativeReShade.Selected(_settings.For(g))))
         {
             var detection = await Task.Run(() => DlssScanner.Detect(game.Root));
             if (detection.HasAny) candidates.Add((game, detection));

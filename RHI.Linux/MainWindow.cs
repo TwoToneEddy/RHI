@@ -190,6 +190,13 @@ public sealed partial class MainWindow : Window
     private async Task RefreshStatus()
     {
         var game = Selected; if (game == null) return;
+        if (NativeReShade.Selected(_settings.For(game)))
+        {
+            var snapshot = await Task.Run(() => ReadNativeSnapshot(game));
+            if (_busy || Selected != game) return;
+            if (!snapshot.HasSameValues(_nativeSnapshot)) ShowGame(snapshot);
+            return;
+        }
         var old = State(game);
         var fresh = await Task.Run(() => InstallationStatus.Read(game, _settings.For(game).SteamConfig, Extras(game)));
         if (_busy || Selected?.Id != game.Id) return;

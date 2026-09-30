@@ -43,21 +43,51 @@ public sealed partial class MainWindow
     }
     private async Task ShowReShadeSettings(Game game)
     {
-        var prefs = _settings.For(game); var installed = State(game).Get("ReShade");
+        var prefs = _settings.For(game);
         var body = new StackPanel { Spacing = 14 };
-        body.Children.Add(Label("Installed: " + (installed.Version ?? "Not installed"), 13, installed.Installed ? Green : Secondary));
-        body.Children.Add(Label("ReShade channel", 13, null, true));
-        var channel = new ComboBox { ItemsSource = new[] { "Nightly", "Stable" }, SelectedItem = prefs.Channel, HorizontalAlignment = HorizontalAlignment.Stretch, Name = "ReShadeChannel" };
-        body.Children.Add(channel);
-        body.Children.Add(Label("Nightly — recommended for Proton. Includes newer DirectX 12 compatibility fixes that can resolve black screens in affected games.\n\nStable — the official release. Version 6.8.0 is missing that Proton fix.", 12, Secondary));
-        body.Children.Add(Label("Apply downloads and installs the selected channel. The choice is saved for this game's future updates.", 12, Muted));
         var dialog = Dialog("ReShade settings", body);
-        body.Children.Add(DialogAction("Apply & install", body, async () =>
+        void SettingsChanged()
         {
-            prefs.Channel = channel.SelectedItem?.ToString() ?? "Nightly"; _settings.Save();
-            await _setup.InstallReShade(game, prefs, Progress); await ReadStates(); ShowGame(); dialog.Close();
+            Render();
+            ShowGame();
+        }
+
+        async Task InstallWindowsReShade(ComboBox channel, ComboBox api)
+        {
+            prefs.Channel = channel.SelectedItem?.ToString() ?? "Nightly";
+            prefs.Api = api.SelectedItem?.ToString() ?? "Auto";
+            _settings.Save();
+            await _setup.InstallReShade(game, prefs, Progress);
+            await ReadStates();
+            ShowGame();
+            dialog.Close();
             _status.Text = "ReShade " + prefs.Channel + " installed and saved for " + game.Name;
-        }));
+        }
+
+        void Render()
+        {
+            body.Children.Clear();
+            body.Children.Add(new ReShadeBackendEditor(dialog, game, prefs, _settings.Save, SettingsChanged));
+            if (NativeReShade.Selected(prefs))
+            {
+                body.Children.Add(Label("Close this window to install the runtime and enable it on the game page.", 12, Muted));
+                return;
+            }
+            var installed = State(game).Get("ReShade");
+            body.Children.Add(Label("Installed: " + (installed.Version ?? "Not installed"), 13, installed.Installed ? Green : Secondary));
+            body.Children.Add(Label("ReShade channel", 13, null, true));
+            var channel = new ComboBox { ItemsSource = new[] { "Nightly", "Stable" }, SelectedItem = prefs.Channel, HorizontalAlignment = HorizontalAlignment.Stretch, Name = "ReShadeChannel" };
+            body.Children.Add(channel);
+            body.Children.Add(Label("Nightly — recommended for Proton, including newer DirectX 12 fixes for black screens. Stable — the official release.", 12, Secondary));
+            body.Children.Add(Label("Graphics API", 13, null, true));
+            var api = new ComboBox { ItemsSource = new[] { "Auto", "DirectX9", "DirectX10", "DirectX11", "DirectX12", "OpenGL" }, SelectedItem = prefs.Api, Name = "ReShadeApi" };
+            body.Children.Add(api);
+            var apply = DialogAction("Apply & install", body, () => InstallWindowsReShade(channel, api));
+            apply.IsEnabled = game.Executable != null;
+            body.Children.Add(apply);
+            if (game.Executable == null) body.Children.Add(Label("No Windows executable found. For a native Vulkan game, select the native backend above.", 12, Secondary));
+        }
+        Render();
         await dialog.ShowDialog(this);
     }
     private async Task ShowHdrSettings(Game game)
@@ -81,6 +111,7 @@ public sealed partial class MainWindow
     }
     private async Task ShowSteamSetup(Game game)
     {
+        NativeReShade.RequireWindowsBackend(_settings.For(game));
         var body = new StackPanel { Spacing = 14 };
         var configs = Proton.LocalConfigs(game).ToList();
         var dialog = Dialog("Finish Steam setup", body);
@@ -121,6 +152,11 @@ public sealed partial class MainWindow
     private async Task ShowShaders()
     {
         if (Selected is not { } game) return;
+        if (NativeReShade.Selected(_settings.For(game)))
+        {
+            await Message("Shaders / Addons", NativeReShade.Title + " uses shaders from " + _native.ShaderRoot + ". Copy extra .fx/.fxh files into its Shaders folder and textures into Textures. Only native Linux .addon64 add-ons load with it; Windows add-ons and RenoDX are not compatible.");
+            return;
+        }
         var body = new StackPanel { Spacing = 14, Children = { Label("Shaders and addons for " + game.Name, 13, Secondary), Label("Shader packs are optional. After installation, press Home in the game to choose effects.", 12, Muted) } };
         foreach (var pack in new[] { "Standard", "Lilium HDR" }) body.Children.Add(DialogAction("Install / update " + pack, body, () => InstallShaders(game, pack)));
         body.Children.Add(DialogAction("Install a custom addon…", body, async () =>
@@ -152,6 +188,7 @@ public sealed partial class MainWindow
         var body = new StackPanel { Spacing = 14, Children = { Label("Steam libraries are detected automatically. Add an external library if a game is missing.", 13, Secondary) } };
         body.Children.Add(DialogAction("Add Steam library…", body, AddLibrary));
         body.Children.Add(DialogAction("Add Windows game…", body, AddGame));
+        body.Children.Add(DialogAction("Native Vulkan ReShade runtime…", body, ShowNativeRuntimeSettings));
         body.Children.Add(Label("DLSS", 13, null, true));
         body.Children.Add(Label("Default DLSS versions and presets used by Quick Apply in the Nvidia Profile Overrides section. " + _dlss.Status + " " + _releases.Status, 12, Muted));
         body.Children.Add(DialogAction("DLSS defaults…", body, ShowDlssDefaults));

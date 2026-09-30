@@ -113,7 +113,7 @@ Supported: native Steam, Flatpak Steam and Snap Steam library scanning; manual g
 
 Also supported: RE Framework for RE Engine games, OptiScaler (Stable, Nightly and DLSS NR), Neural Rendering (all four DLSS 5 methods, Cost Scaler), DLSS/Streamline version swaps, and DLSS presets/render scale/Multi Frame Gen/NVIDIA Override through dxvk-nvapi.
 
-This is not full Windows feature parity. Windows-only NVIDIA driver profile settings (ReBAR, Present Method), Windows HDR toggles, Windows global Vulkan layers, automatic detection of every non-Steam launcher, Luma workflows, and native Linux Vulkan games are not ported. Addon compatibility and anti-cheat policies remain game-specific. Choose games that allow DLL modding.
+This is not full Windows feature parity. Windows-only NVIDIA driver profile settings (ReBAR, Present Method), Windows HDR toggles, Windows global Vulkan layers, automatic detection of every non-Steam launcher and Luma workflows are not ported. Native Linux Vulkan games have only the opt-in [experimental Native Vulkan ReShade backend](#native-vulkan-reshade-experimental); RenoDX is not available for them. Addon compatibility and anti-cheat policies remain game-specific. Choose games that allow DLL modding.
 
 ## Build and validation
 
@@ -124,6 +124,7 @@ This is not full Windows feature parity. Windows-only NVIDIA driver profile sett
 ./run-linux.sh --smoke-test
 ./run-linux.sh --nr-smoke-test
 ./run-linux.sh --os-smoke-test
+./run-linux.sh --native-reshade-smoke-test
 ```
 
 The build script uses an installed .NET SDK or installs the version pinned in `scripts/linux-dependencies.env` in the user's data directory, runs Linux unit/integration tests, and publishes a self-contained Linux **x86_64** build. ARM64/Asahi and 32-bit Linux hosts are not supported by this package. Windows game payloads can still be 32-bit where the component supports them.
@@ -144,7 +145,7 @@ Package names for versioned ICU/OpenSSL libraries vary by release. Consult the [
 
 For upstream maintenance, also run `python3 scripts/check-upstream-sync.py` and `python3 -m unittest discover -s scripts/tests -v`. [LINUX-PORT-SYNC.md](https://github.com/TwoToneEddy/RHI/blob/linux_port/docs/LINUX-PORT-SYNC.md) documents the full source map, remaining feature gaps and explicit review procedure.
 
-`--scan` is read-only and prints detected paths as JSON. `--smoke-test` downloads real x86/x64 ReShade, a real RenoDX addon, shader packs and the RE Framework nightly, then checks install/update/remove and original restoration **in an isolated temporary folder**, plus the nightly x64 download. It never installs into detected games. `--nr-smoke-test` downloads the real Neural Rendering components and, in disposable game folders, installs each method (including 32-bit and DX9 Feeder), checks the status, launch settings and an in-place version swap, then verifies removal restores every original file. `--os-smoke-test` downloads the real OptiScaler Stable, Nightly and DLSS NR builds and, beside a ReShade install in disposable game folders, checks the ReShade64.dll rename, INI, OptiPatcher, DLSS DLLs, Streamline, a reinstall that keeps INI changes, and exact removal. Headless UI tests exercise installed/applied indicators, filtering, and the ReShade channel dialog against isolated game folders. Unit tests cover stale launch logs, changed payloads, launch-readiness checks, flatpak/external libraries, symlink deduplication, casing, malformed manifests, PE architecture rejection, safe launch-option merges, interrupted transactions, file conflicts, and INI restoration.
+`--scan` is read-only and prints detected paths as JSON. `--smoke-test` downloads real x86/x64 ReShade, a real RenoDX addon, shader packs and the RE Framework nightly, then checks install/update/remove and original restoration **in an isolated temporary folder**, plus the nightly x64 download. It never installs into detected games. `--nr-smoke-test` downloads the real Neural Rendering components and, in disposable game folders, installs each method (including 32-bit and DX9 Feeder), checks the status, launch settings and an in-place version swap, then verifies removal restores every original file. `--native-reshade-smoke-test` downloads the pinned experimental Native Vulkan ReShade release, verifies its checksum and opt-in layer manifest, and installs, reinstalls and removes it in a temporary prefix (never `~/.local`), checking that an existing shader is preserved and no optional add-on is installed. `--os-smoke-test` downloads the real OptiScaler Stable, Nightly and DLSS NR builds and, beside a ReShade install in disposable game folders, checks the ReShade64.dll rename, INI, OptiPatcher, DLSS DLLs, Streamline, a reinstall that keeps INI changes, and exact removal. Headless UI tests exercise installed/applied indicators, filtering, and the ReShade channel dialog against isolated game folders. Unit tests cover stale launch logs, changed payloads, launch-readiness checks, flatpak/external libraries, symlink deduplication, casing, malformed manifests, PE architecture rejection, safe launch-option merges, interrupted transactions, file conflicts, and INI restoration.
 
 The original Windows solution requires its Windows build environment; use `RHI.Linux.sln` or the Linux build script on Bazzite. The GUI uses Avalonia with software rendering to avoid depending on the game's graphics stack.
 
@@ -204,10 +205,72 @@ Choose **Preview HDR options**, review the result, then **Copy preview** and pas
 
 The merge only prefixes missing selected variables. Existing DLL overrides, DLSS variables, wrapper arguments, spacing and game arguments remain intact. Already enabled literal values are kept, and unchecked variables are left alone. Conflicting values, duplicate selected variables, ambiguous variable placement, environment wrappers and shell scripting are refused rather than rewritten. Resolve those manually in your launcher. **Restore original preview** shows the input without the preset additions; use **Copy preview** to undo only if no subsequent launcher changes need to be preserved. The original input remains available while the dialog is open.
 
+## Native Vulkan ReShade (experimental)
+
+**Experimental and off by default.** Every game keeps the Windows ReShade backend through Proton unless you select this backend for it. Existing settings are unchanged.
+
+RHI can manage the community [native Linux/Vulkan ReShade port](https://github.com/TheForgotten69/reshade/tree/linux-vulkan) for **native x86-64 Linux games that render with Vulkan**. It is an opt-in Vulkan layer, not a Windows DLL, and it:
+
+- does **not** load Windows RenoDX mods or other Windows `.addon64` files, so it does not provide RenoDX HDR. Native Linux RenoDX builds do not exist yet;
+- does not support OpenGL, 32-bit or non-x86-64 games;
+- is not used for Proton games in this release. Upstream documents experimental Proton hosting, but RHI keeps Windows ReShade for Proton until that is validated separately.
+
+### Setup
+
+1. **Advanced settings → ReShade backend → Native Vulkan ReShade (experimental)** for a Steam game, or **Add native Linux game (experimental)…** for another game. RHI refuses the switch while it has Windows ReShade installed for that game; remove it first (RHI never deletes it automatically).
+2. **Choose native Linux executable…** and select the game binary. RHI checks its ELF header, program-table bounds, executable entry point and execute permissions: it must be an x86-64 executable inside the game folder. Launch scripts, Windows `.exe` files, shared libraries, other architectures and malformed files are refused. Detection is manual: an ELF file does not prove what Steam launches or which graphics API is used.
+3. Tick **This game renders with Vulkan**. RHI does not guess the API.
+4. On the main game page, **Install runtime**. RHI downloads the pinned release `v6.8.0-beta.3` (`reshade-linux-vulkan-v6.8.0-beta.3-x86_64.tar.xz`, SHA-256 `c880b38cd467be738f0f11fd2508db748c1c13a94935540cfafcdd0a8efd894b`) from the port's GitHub releases, validates the archive paths, host library architecture and layer manifest, and never runs the archive's `install.sh`.
+5. **Enable for this game** saves `RESHADE_ENABLE=1` before `%command%` for the selected Steam account, using the usual backup and Steam restart. For other launchers, **Preview…** lets you paste, preview and copy launch options, or set the `RESHADE_ENABLE=1` environment variable for that game yourself. No Proton flags are added.
+6. Launch the game and press **Home** to open ReShade.
+
+While the native backend is selected, the game page hides Windows ReShade, RenoDX, shader packs, RE Framework, Native HDR/Wayland, RE Engine, Neural Rendering, DLSS/NVIDIA overrides and OptiScaler. **Update All**, **Install recommended**, DLSS **Apply to all** and the Shaders/Addons dialog skip it. Windows ReShade setup is refused for launch options containing `RESHADE_ENABLE`, so the two backends are not enabled together.
+
+### What is installed
+
+The runtime is shared by all native games for your user, following the release layout:
+
+| File | Location |
+| --- | --- |
+| Host library | `~/.local/lib/reshade/ReShade64.so` |
+| Vulkan implicit layer (`VK_LAYER_reshade`) | `~/.local/share/vulkan/implicit_layer.d/ReShade64.json` |
+| Standard shaders | `~/.local/share/reshade/reshade-shaders/` |
+
+Locations follow `$XDG_DATA_HOME` (the library is at `$XDG_DATA_HOME/../lib/reshade`). The layer is only active in processes started with `RESHADE_ENABLE=1`; `DISABLE_RESHADE=1` overrides it. Ownership, hashes and transaction records are in `~/.local/share/rhi-linux/native-reshade/`, with the release's `LICENSE.md` (BSD 3-clause). Optional example add-ons in the archive are never installed.
+
+Shaders are seeded: files that already exist, including your edits and other shader packs, are never replaced, including on reinstall. To add a shader pack, copy its `.fx`/`.fxh` files to `reshade-shaders/Shaders` and textures to `reshade-shaders/Textures`. Only native Linux `.addon`/`.addon64` modules load, from `~/.local/share/reshade`.
+
+If another ReShade Vulkan layer is found (for example one you built or installed with the port's own installer, in your home directory or system layer folders), RHI shows it as **user-managed**, uses it as-is for activation, and does not install over, update or remove it.
+
+### Status
+
+- **Runtime:** installed files are verified against their recorded hashes; changed or missing files show **Needs repair**.
+- **Launch:** green only when the saved Steam launch options contain an unambiguous `RESHADE_ENABLE=1`. This means configured, not loaded.
+- **Last launch:** shown only when a ReShade log under `~/.local/share/reshade/logs/` records the layer initialising in the selected executable after the runtime was installed. It does not prove that effects render correctly.
+
+### Configuration and presets
+
+ReShade itself chooses the configuration. Each game gets `~/.local/share/reshade/configurations/{profile}/ReShade.ini`, with its preset beside it; Steam games use the install folder and app ID as the profile, other native applications the name they report to Vulkan or the executable name. A `ReShade.ini` next to the native executable is used in place instead, so RHI warns when one exists (for example, from a Windows ReShade installation in the same folder). RHI does not set `RESHADE_PROFILE`; add it to your launch options yourself to choose a profile. Presets made for Windows ReShade may reference effects or add-ons that are unavailable; test each game.
+
+### Disable, uninstall and recovery
+
+- **Disable** removes only `RESHADE_ENABLE=1`, keeping HDR, wrappers, game arguments and DLL overrides. Conflicting values (`RESHADE_ENABLE=0`, duplicates, the variable after `%command%` or inside a wrapper), `DISABLE_RESHADE`, `env -i` wrappers and shell syntax are refused rather than rewritten.
+- To stop using the backend for a game, disable it on the game page, then choose the default backend in Advanced settings. RHI refuses the switch while `RESHADE_ENABLE` remains in that game's Steam launch options.
+- **Settings → Native Vulkan ReShade runtime… → Remove shared runtime** remains available after switching the last game away from the native backend. Removal is refused while any game still uses the native backend. It removes only runtime and shader files RHI installed and that are unchanged. Configurations, presets, logs, add-ons and edited shaders are kept. A runtime file changed outside RHI is preserved and reported.
+- Interrupted installs and removals are rolled back from the transaction journal when RHI next checks the runtime or installs/removes it, before checking ownership. **Reinstall** restores missing files. If a runtime file has changed, RHI reports its path and preserves it; move it aside before reinstalling.
+
+### Limitations and testing status
+
+- The Flatpak and Snap Steam clients run games in sandboxes that cannot see layers in your home directory. The backend is refused for games from those clients; it supports the native Steam client and host launchers only.
+- Native Steam games that run inside the Steam Linux Runtime container have not been validated. The host library needs Wayland, xkbcommon, XCB (xinput, xfixes, cursor, shape) and Fontconfig libraries, which may not all be available in the container.
+- Automated tests use temporary folders and synthetic packages. The real pinned release was checked with `--native-reshade-smoke-test`, and the installed layout loaded into `vulkaninfo` only with `RESHADE_ENABLE=1` (not with `DISABLE_RESHADE=1`). No game, overlay, input, shader compilation, preset persistence or multi-game configuration test has been performed through RHI yet; report results with your distribution, desktop session, GPU driver and game.
+- Automatic native/Proton detection is not implemented. A manual override and explicit Vulkan confirmation are required.
+
 ## Sources
 
 - [RenoDX mod catalogue and UE Extended instructions](https://github.com/clshortfuse/renodx/wiki/Mods)
 - [Valve Proton runtime configuration](https://github.com/ValveSoftware/Proton#runtime-config-options)
+- [Native Linux/Vulkan ReShade port](https://github.com/TheForgotten69/reshade/tree/linux-vulkan) and its [releases](https://github.com/TheForgotten69/reshade/releases)
 - [Bazzite launch options](https://docs.bazzite.gg/Gaming/launch-options-env-variables/)
 - [ReShade](https://reshade.me/)
 - [Avalonia Linux platform support](https://docs.avaloniaui.net/docs/platform-specific-guides/linux)
@@ -216,3 +279,5 @@ The merge only prefixes missing selected variables. Existing DLL overrides, DLSS
 
 - [Verified Microsoft shader compiler extraction used by reshade-steam-proton](https://github.com/kevinlekiller/reshade-steam-proton/blob/main/reshade-linux.sh)
 - [ReShade support for newer VKD3D device interfaces](https://github.com/crosire/reshade/commit/ec0346e035b7d1c267103ea0d7c231b3945fc2b1)
+
+Native Vulkan setup is also available from the **ReShade cog** beside its install button: select the backend, choose the native executable and confirm Vulkan. Games without a Windows executable show **Set up ReShade…** and the cog. The native runtime row retains the cog so you can change backends later. Advanced settings provides the same backend controls.

@@ -42,7 +42,7 @@ public sealed class AdvancedWindow : Window
         _toolbar = Row(
             new TextBlock { Text = "RHI", FontWeight = FontWeight.Bold, FontSize = 30, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) },
             Button("Rescan games", Scan), Button("Refresh RenoDX catalogue", RefreshCatalog),
-            Button("Add game EXE…", AddGame), Button("Add Steam library…", AddLibrary),
+            Button("Add game EXE…", AddGame), Button("Add native Linux game (experimental)…", AddNativeGame), Button("Add Steam library…", AddLibrary),
             Button("Help", () => { Proton.Open(Path.Combine(AppContext.BaseDirectory, "LINUX.md")); return Task.CompletedTask; }));
         _toolbar.Margin = new Thickness(18, 14);
         shell.Children.Add(_toolbar);
@@ -141,7 +141,7 @@ public sealed class AdvancedWindow : Window
                 SavePreference(() => { game.Executable = game.Executables[exes.SelectedIndex]; prefs.Executable = game.Executable; }); ShowGame();
             };
             _details.Children.Add(exes);
-            if (game.Executable is null) _details.Children.Add(Text("No Windows executable found. If this is a native Linux game, install its Windows version through Steam compatibility settings to use these plugins."));
+            if (game.Executable is null) _details.Children.Add(Text("No Windows executable found. If this is a native Linux game, install its Windows version through Steam compatibility settings to use these plugins, or try the experimental native Vulkan backend below."));
             else _details.Children.Add(Text($"Detected: {game.Architecture} • {game.Api}\nPlugins install beside this executable: {game.InstallDirectory}"));
             var prefix = new TextBox { Text = game.Prefix ?? "", Watermark = "Optional custom prefix: …/compatdata/APPID/pfx", HorizontalAlignment = HorizontalAlignment.Stretch };
             _details.Children.Add(prefix);
@@ -157,7 +157,7 @@ public sealed class AdvancedWindow : Window
                 Proton.Open(Proton.LocalAppData(prefix.Text)); return Task.CompletedTask;
             })));
             _details.Children.Add(Text("The prefix holds Windows settings and saves. Game DLLs are installed in the executable folder above. A missing prefix is normal before the game's first launch."));
-            if (game.Executable is null) return;
+            if (BackendSection(game, prefs) || game.Executable is null) return;
             var install = new Installation(game.InstallDirectory);
             var state = install.ReadState();
             Section("ReShade");
@@ -175,7 +175,7 @@ public sealed class AdvancedWindow : Window
             channel.SelectionChanged += (_, _) => SavePreference(() => prefs.Channel = channel.SelectedItem?.ToString() ?? "Nightly");
             _details.Children.Add(Row(Text("Graphics API"), api, Text("Channel"), channel));
             _details.Children.Add(Text("Nightly is recommended for current Proton: it includes D3D12 compatibility fixes missing from ReShade 6.8.0. The channel is saved per game."));
-            _details.Children.Add(Text("Choose the game's DirectX API even when Proton translates it to Vulkan. Native Vulkan injection is not available in this build."));
+            _details.Children.Add(Text("Choose the game's DirectX API even when Proton translates it to Vulkan. Windows ReShade does not support Vulkan games here; native Linux Vulkan games can try the experimental backend above."));
             var replace = new CheckBox { Content = "Back up and replace existing unmanaged plugin files" };
             _details.Children.Add(replace);
             replace.IsCheckedChanged += (_, _) => _replaceForeign = replace.IsChecked == true;
@@ -353,6 +353,28 @@ public sealed class AdvancedWindow : Window
         }
         catch (Exception ex) { _details.Children.Add(Text("Could not load game settings: " + ex.Message)); CrashReporter.Log(ex.ToString()); }
         finally { _building = false; }
+    }
+
+    // Returns true when the experimental native backend is selected, so Windows-only sections are skipped.
+    private bool BackendSection(Game game, GamePreferences prefs)
+    {
+        _details.Children.Add(new ReShadeBackendEditor(this, game, prefs, _settings.Save, ShowGame));
+        return NativeReShade.Selected(prefs);
+    }
+
+    private async Task AddNativeGame()
+    {
+        var file = await PickFile("Choose a native Linux Vulkan game executable", ["*"]);
+        if (file == null) return;
+        NativeBinary.RequireGameExecutable(file);
+        var root = LinuxPaths.Canonical(Path.GetDirectoryName(file)!);
+        var game = new Game { Name = Path.GetFileNameWithoutExtension(file), Root = root };
+        if (_settings.ManualGames.All(g => g.Id != game.Id)) _settings.ManualGames.Add(game);
+        var prefs = _settings.For(game);
+        prefs.Backend = NativeReShade.Backend; prefs.NativeExecutable = LinuxPaths.Canonical(file); prefs.NativeVulkanConfirmed = false;
+        _settings.Save(); await Scan();
+        _library.SelectedItem = _games.FirstOrDefault(g => g.Id == game.Id);
+        _status.Text = "Native game added. Confirm that it renders with Vulkan.";
     }
 
     private NeuralRenderingSetup NeuralRendering() => new(_downloads, new DlssCatalog(_http, _downloads), new AddonReleases(_http, _downloads), _catalog);

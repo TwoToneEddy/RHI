@@ -36,11 +36,12 @@ public sealed class Installation
     private readonly string _meta;
     private string Manifest => Path.Combine(_meta, "manifest.json");
     private string JournalPath => Path.Combine(_meta, "transaction.json");
-    public Installation(string directory)
+    // metadata: records kept outside the target, e.g. for the shared native ReShade runtime in ~/.local.
+    public Installation(string directory, string? metadata = null)
     {
         _root = LinuxPaths.Canonical(directory);
         if (!Directory.Exists(_root)) throw new DirectoryNotFoundException(_root);
-        _meta = LinuxPaths.ResolveCase(_root, ".rhi-linux");
+        _meta = metadata == null ? LinuxPaths.ResolveCase(_root, ".rhi-linux") : Path.GetFullPath(metadata);
         if (Directory.Exists(_meta) && new DirectoryInfo(_meta).LinkTarget != null) throw new IOException("RHI metadata must not be a symbolic link.");
     }
 
@@ -61,6 +62,14 @@ public sealed class Installation
     }
     public static string Hash(byte[] content) => Convert.ToHexString(SHA256.HashData(content));
     private static string HashFile(string path) { using var stream = File.OpenRead(path); return Convert.ToHexString(SHA256.HashData(stream)); }
+
+    // Recover before callers classify ownership or decide which operations to offer.
+    // Avoid creating metadata for installations with no pending transaction.
+    public void RecoverPendingTransaction()
+    {
+        if (!File.Exists(JournalPath)) return;
+        using var guard = Lock();
+    }
 
     private void Recover()
     {
@@ -250,7 +259,7 @@ public sealed class Installation
         GraphicsApiType.DirectX9 => "d3d9.dll",
         GraphicsApiType.DirectX10 or GraphicsApiType.DirectX11 or GraphicsApiType.DirectX12 => "dxgi.dll",
         GraphicsApiType.OpenGL => "opengl32.dll",
-        GraphicsApiType.Vulkan => throw new IOException("Native Vulkan ReShade injection is not supported by this Linux build. DX11/DX12 games translated by Proton are supported; select their DirectX API."),
+        GraphicsApiType.Vulkan => throw new IOException("Windows ReShade cannot be installed for Vulkan games through Proton. DX11/DX12 games translated by Proton are supported; select their DirectX API. Native Linux Vulkan games can use the experimental Native Vulkan ReShade backend in Advanced settings."),
         _ => throw new IOException("Select DirectX 9, 10, 11, 12 or OpenGL before installing ReShade.")
     };
 

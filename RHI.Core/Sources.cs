@@ -32,4 +32,9 @@ public static class Sources
     public const string OptiScalerDlssNrReleases = "https://api.github.com/repos/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases";
     public const string OptiScalerDlssNr = OptiScalerDlssNrReleases + "?per_page=5";
     public const string OptiPatcher = "https://github.com/optiscaler/OptiPatcher/releases/download/rolling/OptiPatcher.asi";
+    // Experimental native Linux/Vulkan ReShade port, pinned to a verified release archive.
+    public const string NativeReShadeProject = "https://github.com/TheForgotten69/reshade/tree/linux-vulkan";
+    public const string NativeReShadeVersion = "v6.8.0-beta.3";
+    public const string NativeReShadeArchive = "https://github.com/TheForgotten69/reshade/releases/download/" + NativeReShadeVersion + "/reshade-linux-vulkan-" + NativeReShadeVersion + "-x86_64.tar.xz";
+    public const string NativeReShadeArchiveSha256 = "c880b38cd467be738f0f11fd2508db748c1c13a94935540cfafcdd0a8efd894b";
 }

@@ -49,7 +49,7 @@
       ],
       "reason": "Shared assembly source/build registry used by both hosts; changes must build on both platforms.",
       "upstream_sha256": null,
-      "local_sha256": "052f0fc19e43e2b257329c2eff7fa1d82444e64b6056481f782a3a59fbc9373f"
+      "local_sha256": "a6c7e9cb6d95988aafba98151539c77a69094f9b40a3fc73009270ee22258e68"
     },
     "RHI.DropHelper/Program.cs": {
       "status": "windows-only",

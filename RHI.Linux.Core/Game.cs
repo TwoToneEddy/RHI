@@ -52,6 +52,12 @@ public sealed class GamePreferences
     public string? OsFgOutput { get; set; }
     public string? OsFgNvngx { get; set; }
     public string? OsFsrCrashFix { get; set; }
+    // ReShade backend. null keeps Windows ReShade through Proton, the default for new and existing
+    // entries. NativeReShade.Backend selects the experimental native Linux Vulkan layer for
+    // NativeExecutable, which the user chose and confirmed as a Vulkan game.
+    public string? Backend { get; set; }
+    public string? NativeExecutable { get; set; }
+    public bool NativeVulkanConfirmed { get; set; }
 }
 
 // Settings → OptiScaler: chooses the bundled INI template and the overlay hotkey, as on Windows.

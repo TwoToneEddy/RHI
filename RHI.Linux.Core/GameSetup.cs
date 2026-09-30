@@ -11,16 +11,17 @@ public sealed class GameSetup(Downloads downloads, Catalog catalog)
         var value = catalog.ManifestString("graphicsApiOverrides", game.Name)?.Replace("DX", "DirectX");
         return Enum.TryParse<GraphicsApiType>(value, out var mapped) ? mapped : game.Api;
     }
-    public static void RequireClosed(Game game)
+    public static void RequireClosed(Game game) => RequireClosed(game, game.Executable);
+    public static void RequireClosed(Game game, string? executable)
     {
-        if (!OperatingSystem.IsLinux() || game.Executable == null) return;
+        if (!OperatingSystem.IsLinux() || executable == null) return;
         foreach (var directory in Directory.EnumerateDirectories("/proc"))
         {
             if (!int.TryParse(Path.GetFileName(directory), out _)) continue;
             try
             {
                 var command = File.ReadAllText(Path.Combine(directory, "cmdline")).Split('\0').FirstOrDefault() ?? "";
-                if (command.Replace('\\', '/').EndsWith("/" + Path.GetFileName(game.Executable), StringComparison.OrdinalIgnoreCase))
+                if (command.Replace('\\', '/').EndsWith("/" + Path.GetFileName(executable), StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("Close " + game.Name + " before changing its installed components.");
             }
             catch (IOException) { }
@@ -29,6 +30,9 @@ public sealed class GameSetup(Downloads downloads, Catalog catalog)
     }
     public async Task InstallReShade(Game game, GamePreferences preferences, IProgress<string>? progress, string? proxyOverride = null)
     {
+        NativeReShade.RequireWindowsBackend(preferences);
+        foreach (var config in Proton.LocalConfigs(game))
+            NativeReShade.RequireNotActivated(Proton.ReadOptions(config, game.AppId!) ?? "");
         RequireClosed(game);
         var proxy = proxyOverride ?? Installation.ProxyFor(Api(game, preferences));
         var (path, version) = await downloads.ReShade(preferences.Channel, game.Architecture, progress);
@@ -48,6 +52,7 @@ public sealed class GameSetup(Downloads downloads, Catalog catalog)
         preferences.ModName == null ? catalog.Match(game) : catalog.Mods.FirstOrDefault(m => m.Name == preferences.ModName);
     public async Task InstallRenoDx(Game game, GamePreferences preferences, IProgress<string>? progress)
     {
+        NativeReShade.RequireWindowsBackend(preferences);
         RequireClosed(game);
         var mod = Mod(game, preferences) ?? throw new IOException("No matching RenoDX mod is available. Choose a mod in Advanced settings.");
         var url = catalog.AddonUrl(game, mod) ?? throw new IOException("This mod needs a manual download. Open Mod instructions for its author's download link.");
@@ -110,7 +115,11 @@ public sealed class GameSetup(Downloads downloads, Catalog catalog)
     {
         var proxy = new Installation(game.InstallDirectory).ReadState().Proxy;
         if (proxy == null && (extras == null || extras.Dlls.Count == 0 && Proton.HasEnvironment("", extras))) throw new IOException("Install ReShade first.");
-        return ConfigureLaunchOptions(game, config, progress, options => Proton.LaunchOptions(options, proxy, extras));
+        return ConfigureLaunchOptions(game, config, progress, options =>
+        {
+            if (proxy != null) NativeReShade.RequireNotActivated(options);
+            return Proton.LaunchOptions(options, proxy, extras);
+        });
     }
 
     public static async Task ConfigureLaunchOptions(Game game, string config, IProgress<string>? progress, Func<string, string> merge)

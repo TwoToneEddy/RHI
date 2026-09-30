@@ -81,7 +81,7 @@ public sealed class WindowTests : IDisposable
         var dialog = Assert.Single(_window!.OwnedWindows);
         var text = string.Join("\n", dialog.GetLogicalDescendants().OfType<TextBlock>().Select(t => t.Text));
         Assert.Contains("Installed: Nightly", text); Assert.Contains("black screen", text);
-        var picker = dialog.GetLogicalDescendants().OfType<ComboBox>().Single(); picker.SelectedItem = "Stable"; dialog.Close();
+        var picker = dialog.GetLogicalDescendants().OfType<ComboBox>().Single(c => c.Name == "ReShadeChannel"); picker.SelectedItem = "Stable"; dialog.Close();
         Assert.Equal("Nightly", Settings.Load().For(game).Channel);
         Assert.Contains("Nightly", Text);
     }

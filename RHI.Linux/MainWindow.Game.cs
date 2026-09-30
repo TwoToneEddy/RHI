@@ -8,11 +8,12 @@ namespace RHI.Linux;
 
 public sealed partial class MainWindow
 {
-    private void ShowGame()
+    private void ShowGame(NativeGameSnapshot? nativeSnapshot = null)
     {
         if (Selected is not { } game) return;
         _settings.LastGameId = game.Id; _settings.Save();
         var prefs = _settings.For(game); var state = State(game); var mod = _setup.Mod(game, prefs);
+        var native = NativeReShade.Selected(prefs);
         _details.Children.Clear();
         var title = new Grid { ColumnDefinitions = new("*,Auto") };
         title.Children.Add(Label(game.Name, 20, null, true));
@@ -25,24 +26,33 @@ public sealed partial class MainWindow
         var actions = new Grid { ColumnDefinitions = new("Auto,*,Auto") };
         var launch = Action("▶ Launch", async () =>
         {
-            if (game.AppId == null) { await Message("Launch your game", "Start this game using its usual launcher. RHI has installed the plugins beside its executable."); return; }
-            if (State(game).Get("ReShade").Installed && !State(game).LaunchConfigured || !State(game).DlssLaunchConfigured) { await ShowSteamSetup(game); return; }
+            if (game.AppId == null) { await Message("Launch your game", native ? "Start this game using its usual launcher with RESHADE_ENABLE=1 set." : "Start this game using its usual launcher. RHI has installed the plugins beside its executable."); return; }
+            if (!native && (State(game).Get("ReShade").Installed && !State(game).LaunchConfigured || !State(game).DlssLaunchConfigured)) { await ShowSteamSetup(game); return; }
             Proton.Open("steam://rungameid/" + game.AppId);
         }, "success", "LaunchGame");
         actions.Children.Add(launch);
-        var shortcuts = Row(Action("Mod instructions", () => { Proton.Open(mod?.NameUrl ?? mod?.NexusUrl ?? "https://github.com/clshortfuse/renodx/wiki/Mods"); return Task.CompletedTask; }),
-            Action(prefs.Favourite ? "★ Favourite" : "Favourite", () => { prefs.Favourite = !prefs.Favourite; _settings.Save(); Filter(); return Task.CompletedTask; }),
+        var shortcuts = Row(Action(prefs.Favourite ? "★ Favourite" : "Favourite", () => { prefs.Favourite = !prefs.Favourite; _settings.Save(); Filter(); return Task.CompletedTask; }),
             Action(prefs.Hidden ? "Unhide" : "Hide", () => { prefs.Hidden = !prefs.Hidden; _settings.Save(); Filter(); return Task.CompletedTask; }),
             Action("Browse", () => { Proton.Open(game.Root); return Task.CompletedTask; }));
+        if (!native) shortcuts.Children.Insert(0, Action("Mod instructions", () => { Proton.Open(mod?.NameUrl ?? mod?.NexusUrl ?? "https://github.com/clshortfuse/renodx/wiki/Mods"); return Task.CompletedTask; }));
         Grid.SetColumn(shortcuts, 2); actions.Children.Add(shortcuts); info.Children.Add(actions);
         var badges = new WrapPanel { Orientation = Orientation.Horizontal };
-        var names = new List<string> { game.Source, "Proton" };
+        var names = new List<string> { game.Source, native ? "Native Linux" : "Proton" };
         if (Directory.Exists(Path.Combine(game.Root, "Engine"))) names.Add("Unreal Engine");
         if (game.IsREEngine) names.Add("RE Engine");
-        if (game.Executable != null) { names.Add(_setup.Api(game, prefs).ToString().Replace("DirectX", "DX")); names.Add(game.Architecture == RenoDXCommander.Services.MachineType.I386 ? "32-bit" : "64-bit"); }
-        if (state.State.Files.FirstOrDefault(f => f.Component == "RenoDX") is { } addon) names.Insert(0, addon.Path);
+        if (native) { if (prefs.NativeVulkanConfirmed) names.Add("Vulkan"); names.Add(NativeReShade.Title); }
+        else if (game.Executable != null) { names.Add(_setup.Api(game, prefs).ToString().Replace("DirectX", "DX")); names.Add(game.Architecture == RenoDXCommander.Services.MachineType.I386 ? "32-bit" : "64-bit"); }
+        if (!native && state.State.Files.FirstOrDefault(f => f.Component == "RenoDX") is { } addon) names.Insert(0, addon.Path);
         foreach (var name in names) { var badge = Badge(name); badge.Margin = new Thickness(0, 0, 6, 2); badges.Children.Add(badge); }
         info.Children.Add(badges); _details.Children.Add(Card(info));
+        if (native)
+        {
+            // Proton, DLL and RenoDX controls cannot apply to a native target, so they are not offered.
+            _details.Children.Add(NativeReShadeSection(game, nativeSnapshot ?? ReadNativeSnapshot(game)));
+            var back = Action("Advanced settings  ›", OpenAdvanced, "", "AdvancedSettings"); back.HorizontalAlignment = HorizontalAlignment.Left;
+            ToolTip.SetTip(back, "Native executable, Vulkan confirmation and ReShade backend"); _details.Children.Add(back);
+            return;
+        }
 
         var compatibilityNotes = _catalog.GameNotes(game);
         if (!string.IsNullOrWhiteSpace(compatibilityNotes))
@@ -81,7 +91,16 @@ public sealed partial class MainWindow
         _details.Children.Add(Card(summary));
         _details.Children.Add(NativeHdrSection(game));
         if (game.IsREEngine) _details.Children.Add(ReEngineLaunchSection(game));
-        if (game.Executable == null) { _details.Children.Add(Label("Choose the game's Windows executable in Advanced settings to install plugins.", 13, Secondary)); _details.Children.Add(Action("Advanced settings", OpenAdvanced)); return; }
+        if (game.Executable == null)
+        {
+            var reshadeSetup = new StackPanel { Spacing = 10 };
+            reshadeSetup.Children.Add(Label("ReShade", 13, null, true));
+            reshadeSetup.Children.Add(Label("Choose a ReShade backend and executable to get started.", 12, Secondary));
+            reshadeSetup.Children.Add(Row(Action("Set up ReShade…", () => ShowReShadeSettings(game)),
+                Action("⚙", () => ShowReShadeSettings(game), "", "ReShadeSettings")));
+            _details.Children.Add(Card(reshadeSetup));
+            _details.Children.Add(Action("Advanced settings", OpenAdvanced)); return;
+        }
 
         var table = new StackPanel { Spacing = 10, Children = { Label("Components", 13, null, true) } };
         if (game.IsREEngine)
@@ -170,6 +189,7 @@ public sealed partial class MainWindow
     private async Task InstallRecommended(Game game)
     {
         var prefs = _settings.For(game); var state = State(game);
+        NativeReShade.RequireWindowsBackend(prefs);
         if (game.IsREEngine && !RefStatus(game, state).Installed) await _ref.Install(game, Progress);
         if (!state.Get("ReShade").Installed || state.Get("ReShade").Channel != prefs.Channel) await _setup.InstallReShade(game, prefs, Progress);
         if (_setup.Mod(game, prefs) != null) await _setup.InstallRenoDx(game, prefs, Progress);
@@ -177,6 +197,7 @@ public sealed partial class MainWindow
     }
     private async Task InstallShaders(Game game, string pack)
     {
+        NativeReShade.RequireWindowsBackend(_settings.For(game));
         GameSetup.RequireClosed(game);
         var payload = await _downloads.Shaders(pack, Progress);
         if (!InstallationStatus.Read(game).Get("ReShade").Installed) await _setup.InstallReShade(game, _settings.For(game), Progress);
@@ -198,7 +219,8 @@ public sealed partial class MainWindow
     {
         if (GameSetup.AnySteamGameRunning()) throw new IOException("Close running Steam games before updating their plugins.");
         await RefreshDlssCatalogs(force: true);
-        var installed = _games.Where(g => State(g).Components.Count > 0).ToList();
+        // Native Vulkan ReShade games never receive Windows components; their shared runtime is pinned.
+        var installed = _games.Where(g => State(g).Components.Count > 0 && !NativeReShade.Selected(_settings.For(g))).ToList();
         if (installed.Count == 0) { await Message("Update All", "There are no installed plugins to update yet. Select a game and choose Install recommended."); return; }
         foreach (var game in installed)
         {
